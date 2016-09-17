@@ -1,0 +1,2 @@
+/usr/local/spark/sql/catalyst/src/test/java/org/apache/spark/sql/catalyst/expressions/XXH64Suite.java
+/usr/local/spark/sql/catalyst/src/test/java/org/apache/spark/sql/streaming/JavaOutputModeSuite.java
