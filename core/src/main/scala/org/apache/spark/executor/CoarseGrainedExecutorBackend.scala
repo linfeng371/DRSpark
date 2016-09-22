@@ -43,7 +43,9 @@ private[spark] class CoarseGrainedExecutorBackend(
     hostname: String,
     cores: Int,
     userClassPath: Seq[URL],
-    env: SparkEnv)
+    env: SparkEnv,
+    workerUrl: String,
+    appId: String)
   extends ThreadSafeRpcEndpoint with ExecutorBackend with Logging {
 
   private[this] val stopping = new AtomicBoolean(false)
@@ -53,6 +55,8 @@ private[spark] class CoarseGrainedExecutorBackend(
   // If this CoarseGrainedExecutorBackend is changed to support multiple threads, then this may need
   // to be changed so that we don't share the serializer instance across threads
   private[this] val ser: SerializerInstance = env.closureSerializer.newInstance()
+
+
 
   override def onStart() {
     logInfo("Connecting to driver: " + driverUrl)
@@ -67,6 +71,13 @@ private[spark] class CoarseGrainedExecutorBackend(
       case Failure(e) =>
         exitExecutor(1, s"Cannot register with driver: $driverUrl", e)
     }(ThreadUtils.sameThread)
+
+    // Connect to worker to report PID
+    val pid = Utils.getProcessName.split("@")(0) 
+    logInfo(s"Report pid to worker: $workerUrl  executorId=$executorId, appId=$appId, pid=$pid ")
+    val worker = rpcEnv.setupEndpointRefByURI(workerUrl)
+    worker.send(ReportPid(executorId, appId, pid))
+      
   }
 
   def extractLogUrls: Map[String, String] = {
@@ -210,7 +221,7 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
         driverConf, executorId, hostname, port, cores, isLocal = false)
 
       env.rpcEnv.setupEndpoint("Executor", new CoarseGrainedExecutorBackend(
-        env.rpcEnv, driverUrl, executorId, hostname, cores, userClassPath, env))
+        env.rpcEnv, driverUrl, executorId, hostname, cores, userClassPath, env, workerUrl.get, appId))
       workerUrl.foreach { url =>
         env.rpcEnv.setupEndpoint("WorkerWatcher", new WorkerWatcher(env.rpcEnv, url))
       }

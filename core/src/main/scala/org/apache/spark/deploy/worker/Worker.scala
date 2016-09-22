@@ -39,6 +39,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.metrics.MetricsSystem
 import org.apache.spark.rpc._
 import org.apache.spark.util.{ThreadUtils, Utils}
+import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages.ReportPid
 
 private[deploy] class Worker(
     override val rpcEnv: RpcEnv,
@@ -394,6 +395,9 @@ private[deploy] class Worker(
   override def receive: PartialFunction[Any, Unit] = synchronized {
     case SendHeartbeat =>
       if (connected) { sendToMaster(Heartbeat(workerId, self)) }
+
+    case ReportPid(executorId, appId, pid) =>
+      logInfo(s"get ReportPid($executorId, $appId, $pid)")
 
     case WorkDirCleanup =>
       // Spin up a separate thread (in a future) to do the dir cleanup; don't tie up worker
