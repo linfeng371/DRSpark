@@ -1,5 +1,0 @@
-/usr/local/spark/launcher/src/test/java/org/apache/spark/launcher/BaseSuite.java
-/usr/local/spark/launcher/src/test/java/org/apache/spark/launcher/CommandBuilderUtilsSuite.java
-/usr/local/spark/launcher/src/test/java/org/apache/spark/launcher/SparkSubmitOptionParserSuite.java
-/usr/local/spark/launcher/src/test/java/org/apache/spark/launcher/SparkSubmitCommandBuilderSuite.java
-/usr/local/spark/launcher/src/test/java/org/apache/spark/launcher/LauncherServerSuite.java

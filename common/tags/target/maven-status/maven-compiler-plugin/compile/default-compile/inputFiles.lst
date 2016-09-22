@@ -1,8 +1,0 @@
-/usr/local/spark/common/tags/src/main/java/org/apache/spark/tags/DockerTest.java
-/usr/local/spark/common/tags/src/main/scala/org/apache/spark/annotation/package-info.java
-/usr/local/spark/common/tags/src/main/java/org/apache/spark/annotation/Private.java
-/usr/local/spark/common/tags/src/main/java/org/apache/spark/annotation/DeveloperApi.java
-/usr/local/spark/common/tags/src/main/java/org/apache/spark/annotation/AlphaComponent.java
-/usr/local/spark/common/tags/src/main/java/org/apache/spark/tags/ExtendedHiveTest.java
-/usr/local/spark/common/tags/src/main/java/org/apache/spark/tags/ExtendedYarnTest.java
-/usr/local/spark/common/tags/src/main/java/org/apache/spark/annotation/Experimental.java
