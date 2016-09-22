@@ -159,6 +159,7 @@ private[deploy] class Worker(
   def coresFree: Int = cores - coresUsed
   def memoryFree: Int = memory - memoryUsed
 
+  private val executorToPid = new HashMap[String, String]
   private def createWorkDir() {
     workDir = Option(workDirPath).map(new File(_)).getOrElse(new File(sparkHome, "work"))
     try {
@@ -392,12 +393,27 @@ private[deploy] class Worker(
     }
   }
 
+  private def getExecutorResourceInfo: Set[ExecutorResourceInfo] = {
+    var pidString: String = ""
+    executorToPid.foreach(etp => pidString+=etp._2+"|")
+    pidString = pidString.dropRight(1)
+  }
+
   override def receive: PartialFunction[Any, Unit] = synchronized {
+    case ReportPid(appId_executorId, pid) =>
+      logInfo(s"get ReportPid($appId_executorId, $pid)")
+      ExecutorToPid(appId_executorId) = pid
+
+    case ExecutorShutdown(appId_executorId) =>
+      logInfo(s"get ExecutorShutdown($appId_executorId)")
+      ExecutorToPid -= appId_executorId
+
+    case AskExecutorsInfo =>
+      logInfo("get AskExecutorsInfo")
+      val ExecutorResourceInfoSet = getExecutorResourceInfo 
+
     case SendHeartbeat =>
       if (connected) { sendToMaster(Heartbeat(workerId, self)) }
-
-    case ReportPid(executorId, appId, pid) =>
-      logInfo(s"get ReportPid($executorId, $appId, $pid)")
 
     case WorkDirCleanup =>
       // Spin up a separate thread (in a future) to do the dir cleanup; don't tie up worker

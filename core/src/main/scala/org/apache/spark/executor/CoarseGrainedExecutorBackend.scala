@@ -76,7 +76,7 @@ private[spark] class CoarseGrainedExecutorBackend(
     val pid = Utils.getProcessName.split("@")(0) 
     logInfo(s"Report pid to worker: $workerUrl  executorId=$executorId, appId=$appId, pid=$pid ")
     val worker = rpcEnv.setupEndpointRefByURI(workerUrl)
-    worker.send(ReportPid(executorId, appId, pid))
+    worker.send(ReportPid(s"$appId-$executorId", pid))
       
   }
 
@@ -119,6 +119,10 @@ private[spark] class CoarseGrainedExecutorBackend(
     case StopExecutor =>
       stopping.set(true)
       logInfo("Driver commanded a shutdown")
+
+      // Sign out from worker
+      worker.send(ExecutorShutdown(s"$appId-$executorId"))
+
       // Cannot shutdown here because an ack may need to be sent back to the caller. So send
       // a message to self to actually do the shutdown.
       self.send(Shutdown)

@@ -107,8 +107,9 @@ private[spark] object CoarseGrainedClusterMessages {
   case object Shutdown extends CoarseGrainedClusterMessage
 
   case class ReportPid(
-      executorId: String,
-      appId: String,
+      appId_ecutorId: String,
       pid: String)
     extends CoarseGrainedClusterMessage
+
+  case class ExecutorShutdown(appId_ecutorId: String) extends CoarseGrainedClusterMessage
 }

@@ -1,0 +1,50 @@
+#!/bin/bash
+
+echo "################"
+echo "####stop all####"
+echo "################"
+$SPARK_HOME/sbin/stop-all.sh
+
+
+
+export MAVEN_OPTS="-Xmx2g -XX:MaxPermSize=512M -XX:ReservedCodeCacheSize=512m"
+echo "################"
+echo "##compile core##"
+echo "################"
+mvn -pl :spark-core_2.11 clean install -DskipTests
+
+if [ $? != 0 ]; then
+	echo "##################"
+	echo "##compile failed##"
+	echo "##################"
+	exit 1
+fi
+
+echo "###########"
+echo "##pack up##"
+echo "###########"
+mvn --projects assembly/ -Phadoop-2.6 -DskipTests install
+
+if [ $? != 0 ]; then
+	echo "##################"
+	echo "##pack up failed##"
+	echo "##################"
+	exit 1
+fi
+
+
+echo "##############"
+echo "##distribute##"
+echo "##############"
+pssh -h /slave rm -rf \$SPARK_HOME/assembly
+
+mscp -conf /mscpslave -dir \$SPARK_HOME/assembly/ $SPARK_HOME
+
+sec=$[$SECONDS % 60]
+tmp=$[$SECONDS - $sec]
+min=$[$tmp / 60]
+
+echo "Total time $min m $sec s."  
+
+exit $?
+
