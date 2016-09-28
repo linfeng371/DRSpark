@@ -106,10 +106,4 @@ private[spark] object CoarseGrainedClusterMessages {
   // Used internally by executors to shut themselves down.
   case object Shutdown extends CoarseGrainedClusterMessage
 
-  case class ReportPid(
-      appId_ecutorId: String,
-      pid: String)
-    extends CoarseGrainedClusterMessage
-
-  case class ExecutorShutdown(appId_ecutorId: String) extends CoarseGrainedClusterMessage
 }

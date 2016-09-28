@@ -48,6 +48,8 @@ private[deploy] class Master(
 
   private val forwardMessageThread =
     ThreadUtils.newDaemonSingleThreadScheduledExecutor("master-forward-message-thread")
+  private val dynamicResourceScheduleThread = 
+    ThreadUtils.newDaemonSingleThreadScheduledExecutor("master-dynamic-resource-schedule-thread")
 
   private val hadoopConf = SparkHadoopUtil.get.newConfiguration(conf)
 
@@ -58,6 +60,7 @@ private[deploy] class Master(
   private val RETAINED_DRIVERS = conf.getInt("spark.deploy.retainedDrivers", 200)
   private val REAPER_ITERATIONS = conf.getInt("spark.dead.worker.persistence", 15)
   private val RECOVERY_MODE = conf.get("spark.deploy.recoveryMode", "NONE")
+  private val DYNAMICRESOURCESCHEDULE_TIME_MS = conf.getInt("spark.dynamicResourceSchedule.time", 15) * 1000
 
   val workers = new HashSet[WorkerInfo]
   val idToApp = new HashMap[String, ApplicationInfo]
@@ -134,6 +137,11 @@ private[deploy] class Master(
       }
     }, 0, WORKER_TIMEOUT_MS, TimeUnit.MILLISECONDS)
 
+    dynamicResourceScheduleTask = dynamicResourceScheduleThread.scheduleAtFixedRate(new Runnable {
+      override def run(): Unit = Utils.tryLogNonFatalError {
+        self.send(DynamicResourceSchedule)
+      }
+    }, 0, DYNAMICRESOURCESCHEDULE_TIME_MS, TimeUnit.MILLISECONDS)
     if (restServerEnabled) {
       val port = conf.getInt("spark.master.rest.port", 6066)
       restServer = Some(new StandaloneRestServer(address.host, port, conf, self, masterUrl))

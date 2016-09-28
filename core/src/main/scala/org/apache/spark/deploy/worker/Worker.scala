@@ -26,6 +26,7 @@ import java.util.concurrent.{Future => JFuture, ScheduledFuture => JScheduledFut
 
 import scala.collection.mutable.{HashMap, HashSet, LinkedHashMap}
 import scala.concurrent.ExecutionContext
+import scala.sys.process._
 import scala.util.{Failure, Random, Success}
 import scala.util.control.NonFatal
 
@@ -394,23 +395,55 @@ private[deploy] class Worker(
   }
 
   private def getExecutorResourceInfo: Set[ExecutorResourceInfo] = {
+    if (executorToPid.isEmpty){
+      logInfo("Bad getExecutorResourceInfo, executorToPid is empty")
+      return Set[ExecutorResourceInfo]()
+    }
+    
+    val pidToResourceInfo = new HashMap[String,(Float,Float)]
     var pidString: String = ""
-    executorToPid.foreach(etp => pidString+=etp._2+"|")
+    executorToPid.foreach(etp => pidString += etp._2+",")
     pidString = pidString.dropRight(1)
+    val execTop = s"top -bn 1 -p $pidString" !!
+    val retSplit = execTop.split("COMMAND\n")(1).split("\n")
+
+    for(line <- retSplit){
+      val lineSplit = line.split("\\s+")
+      pidToResourceInfo(lineSplit(1)) = (lineSplit(9).toFloat,lineSplit(10).toFloat)
+    }
+
+    val infoSet = Set[ExecutorResourceInfo]()
+    executorToPid.foreach({etp => 
+      val executor = etp._1
+      val pid = etp._2
+      if(!pidToResourceInfo.contains(pid))
+        logInfo(s"Bad Get executorResourceInfo from pidToResourceInfo: pid $pid not found")
+      val cpuRate = pidToResourceInfo.getOrElse(etp._2, 0.toFloat)._1
+      val memRate = pidToResourceInfo.getOrElse(etp._2, 0.toFloat)._2
+      infoSet += new ExecutorResourceInfo(executor, cpuRate, memRate) 
+      })
+    infoSet
   }
 
   override def receive: PartialFunction[Any, Unit] = synchronized {
     case ReportPid(appId_executorId, pid) =>
       logInfo(s"get ReportPid($appId_executorId, $pid)")
-      ExecutorToPid(appId_executorId) = pid
+      if (executorToPid.contains(appId_executorId))
+        logInfo(s"Bad ReportPid: Executor $appId_executorId has already registered")
+      else
+        executorToPid(appId_executorId) = pid
 
     case ExecutorShutdown(appId_executorId) =>
       logInfo(s"get ExecutorShutdown($appId_executorId)")
-      ExecutorToPid -= appId_executorId
+      if (!executorToPid.contains(appId_executorId))
+        logInfo(s"Bad ExecutorShutdown: Executor $appId_executorId not found")
+      else
+        executorToPid -= appId_executorId
 
-    case AskExecutorsInfo =>
-      logInfo("get AskExecutorsInfo")
+    case AskExecutorsResourceInfo =>
+      logInfo("get AskExecutorsResourceInfo")
       val ExecutorResourceInfoSet = getExecutorResourceInfo 
+      sendToMaster(ReportExecutorsResourceInfo(ExecutorResourceInfoSet))
 
     case SendHeartbeat =>
       if (connected) { sendToMaster(Heartbeat(workerId, self)) }

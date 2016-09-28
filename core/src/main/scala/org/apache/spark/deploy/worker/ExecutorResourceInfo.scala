@@ -14,26 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.spark.deploy.worker
 
-class ExecutorResourceInfo(
-   val executorId: String,
-   val cpuRate: String,
-   val memRate: Map[String, String]) {
-
-  def canEqual(other: Any): Boolean = other.isInstanceOf[ExecutorInfo]
-
-  override def equals(other: Any): Boolean = other match {
-    case that: ExecutorInfo =>
-      (that canEqual this) &&
-        executorId == that.executorId &&
-        cpuRate == that.cpuRate &&
-        memRate == that.memRate
-    case _ => false
-  }
-
-  override def hashCode(): Int = {
-    val state = Seq(executorId, cpuRate, memRate)
-    state.map(_.hashCode()).foldLeft(0)((a, b) => 31 * a + b)
-  }
+private[spark] class ExecutorResourceInfo(
+    _executorId: String,
+    _cpuRate: Float,
+    _memRate: Float)
+  extends Serializable {
+    val executorId = _executorId
+    val cpuRate = _cpuRate
+    val memRate = _memRate
 }

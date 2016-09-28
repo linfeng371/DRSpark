@@ -23,7 +23,7 @@ import org.apache.spark.deploy.ExecutorState.ExecutorState
 import org.apache.spark.deploy.master.{ApplicationInfo, DriverInfo, WorkerInfo}
 import org.apache.spark.deploy.master.DriverState.DriverState
 import org.apache.spark.deploy.master.RecoveryState.MasterState
-import org.apache.spark.deploy.worker.{DriverRunner, ExecutorRunner}
+import org.apache.spark.deploy.worker.{DriverRunner, ExecutorRunner, ExecutorResourceInfo}
 import org.apache.spark.rpc.RpcEndpointRef
 import org.apache.spark.util.Utils
 
@@ -209,4 +209,14 @@ private[deploy] object DeployMessages {
 
   case object SendHeartbeat
 
+  case class ReportPid(
+      appId_ecutorId: String,
+      pid: String) 
+    extends DeployMessage
+
+  case class ExecutorShutdown(appId_ecutorId: String) extends DeployMessage
+
+  case object AskExecutorsResourceInfo
+
+  case class ReportExecutorsResourceInfo(ExecutorResourceInfoSet: Set[ExecutorResourceInfo])
 }
