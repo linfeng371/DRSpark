@@ -40,7 +40,6 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.metrics.MetricsSystem
 import org.apache.spark.rpc._
 import org.apache.spark.util.{ThreadUtils, Utils}
-import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages.ReportPid
 
 private[deploy] class Worker(
     override val rpcEnv: RpcEnv,
@@ -160,7 +159,7 @@ private[deploy] class Worker(
   def coresFree: Int = cores - coresUsed
   def memoryFree: Int = memory - memoryUsed
 
-  private val executorToPid = new HashMap[String, String]
+  private val idToExecutor = new HashMap[String, (String, Int, Int)]
   private def createWorkDir() {
     workDir = Option(workDirPath).map(new File(_)).getOrElse(new File(sparkHome, "work"))
     try {
@@ -395,55 +394,65 @@ private[deploy] class Worker(
   }
 
   private def getExecutorResourceInfo: Set[ExecutorResourceInfo] = {
-    if (executorToPid.isEmpty){
-      logInfo("Bad getExecutorResourceInfo, executorToPid is empty")
+    if (idToExecutor.isEmpty){
+      logInfo("Bad getExecutorResourceInfo, idToExecutor is empty")
       return Set[ExecutorResourceInfo]()
     }
-    
+    val pidToCoresMemory = new HashMap[String,(Int, Int)]
     val pidToResourceInfo = new HashMap[String,(Float,Float)]
     var pidString: String = ""
-    executorToPid.foreach(etp => pidString += etp._2+",")
+    idToExecutor.foreach(ite => {
+      val thisPid = ite._2._1
+      val thisCores = ite._2._2
+      val thisMaxMem = ite._2._3
+      pidString += thisPid+","
+      pidToCoresMemory(thisPid) = (thisCores, thisMaxMem)
+      })
     pidString = pidString.dropRight(1)
     val execTop = s"top -bn 1 -p $pidString" !!
     val retSplit = execTop.split("COMMAND\n")(1).split("\n")
 
     for(line <- retSplit){
       val lineSplit = line.split("\\s+")
-      pidToResourceInfo(lineSplit(1)) = (lineSplit(9).toFloat,lineSplit(10).toFloat)
+      val thisPid = lineSplit(1)
+      val thisCpuRate = lineSplit(9).toFloat
+      val thisMem = lineSplit(10).toFloat
+      val (thisCores, thisMaxMem) = pidToCoresMemory(thisPid)
+      pidToResourceInfo(thisPid) = (thisCpuRate/thisCores,thisMem/thisMaxMem)
     }
 
     val infoSet = Set[ExecutorResourceInfo]()
-    executorToPid.foreach({etp => 
-      val executor = etp._1
-      val pid = etp._2
+    idToExecutor.foreach({ite => 
+      val executor = ite._1
+      val pid = ite._2._1
       if(!pidToResourceInfo.contains(pid))
         logInfo(s"Bad Get executorResourceInfo from pidToResourceInfo: pid $pid not found")
-      val cpuRate = pidToResourceInfo.getOrElse(etp._2, 0.toFloat)._1
-      val memRate = pidToResourceInfo.getOrElse(etp._2, 0.toFloat)._2
+      val cpuRate = pidToResourceInfo.getOrElse(ite._2._1, 0F)._1
+      val memRate = pidToResourceInfo.getOrElse(ite._2._1, 0F)._2
       infoSet += new ExecutorResourceInfo(executor, cpuRate, memRate) 
       })
     infoSet
   }
 
   override def receive: PartialFunction[Any, Unit] = synchronized {
-    case ReportPid(appId_executorId, pid) =>
-      logInfo(s"get ReportPid($appId_executorId, $pid)")
-      if (executorToPid.contains(appId_executorId))
-        logInfo(s"Bad ReportPid: Executor $appId_executorId has already registered")
+    case RegisterExecutorToWorker(appId_executorId, pid, executorCores, executorMaxMemory) =>
+      logInfo(s"get RegisterExecutorToWorker($appId_executorId, $pid, $executorCores, $executorMaxMemory)")
+      if (idToExecutor.contains(appId_executorId))
+        logInfo(s"Bad RegisterExecutorToWorker: Executor $appId_executorId has already registered")
       else
-        executorToPid(appId_executorId) = pid
+        idToExecutor(appId_executorId) = (pid, executorCores, executorMaxMemory)
 
     case ExecutorShutdown(appId_executorId) =>
       logInfo(s"get ExecutorShutdown($appId_executorId)")
-      if (!executorToPid.contains(appId_executorId))
+      if (!idToExecutor.contains(appId_executorId))
         logInfo(s"Bad ExecutorShutdown: Executor $appId_executorId not found")
       else
-        executorToPid -= appId_executorId
+        idToExecutor -= appId_executorId
 
-    case AskExecutorsResourceInfo =>
-      logInfo("get AskExecutorsResourceInfo")
-      val ExecutorResourceInfoSet = getExecutorResourceInfo 
-      sendToMaster(ReportExecutorsResourceInfo(ExecutorResourceInfoSet))
+    case RequestExecutorsResourceInfo(requestId) =>
+      logInfo(s"get RequestExecutorsResourceInfo, requestId: $requestId")
+      val executorResourceInfoSet = getExecutorResourceInfo 
+      sendToMaster(ReportExecutorsResourceInfo(requestId, executorResourceInfoSet))
 
     case SendHeartbeat =>
       if (connected) { sendToMaster(Heartbeat(workerId, self)) }

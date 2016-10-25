@@ -20,6 +20,7 @@ package org.apache.spark.executor
 import java.net.URL
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
+import java.lang.management.ManagementFactory
 
 import scala.collection.mutable
 import scala.util.{Failure, Success}
@@ -49,6 +50,8 @@ private[spark] class CoarseGrainedExecutorBackend(
     appId: String)
   extends ThreadSafeRpcEndpoint with ExecutorBackend with Logging {
 
+  var currentCores = cores
+
   private[this] val stopping = new AtomicBoolean(false)
   var executor: Executor = null
   @volatile var driver: Option[RpcEndpointRef] = None
@@ -57,14 +60,15 @@ private[spark] class CoarseGrainedExecutorBackend(
   // to be changed so that we don't share the serializer instance across threads
   private[this] val ser: SerializerInstance = env.closureSerializer.newInstance()
 
-
+  val rt = Runtime.getRuntime()
+  val maxMemory = rt.maxMemory() * 1.5
 
   override def onStart() {
     logInfo("Connecting to driver: " + driverUrl)
     rpcEnv.asyncSetupEndpointRefByURI(driverUrl).flatMap { ref =>
       // This is a very fast action so we can use "ThreadUtils.sameThread"
       driver = Some(ref)
-      ref.ask[Boolean](RegisterExecutor(executorId, self, hostname, cores, extractLogUrls))
+      ref.ask[Boolean](RegisterExecutor(executorId, self, hostname, currentCores, extractLogUrls))
     }(ThreadUtils.sameThread).onComplete {
       // This is a very fast action so we can use "ThreadUtils.sameThread"
       case Success(msg) =>
@@ -73,11 +77,11 @@ private[spark] class CoarseGrainedExecutorBackend(
         exitExecutor(1, s"Cannot register with driver: $driverUrl", e)
     }(ThreadUtils.sameThread)
 
-    // Connect to worker to report PID
+    // Connect to worker to register
     val pid = Utils.getProcessName.split("@")(0) 
-    logInfo(s"Report pid to worker: $workerUrl  executorId=$executorId, appId=$appId, pid=$pid ")
+    logInfo(s"RegisterExecutorToWorker: $workerUrl  executorId=$executorId, appId=$appId, pid=$pid, cores=$currentCores, maxMemory=$maxMemory ")
     val worker = rpcEnv.setupEndpointRefByURI(workerUrl)
-    worker.send(ReportPid(s"$appId-$executorId", pid))
+    worker.send(RegisterExecutorToWorker(s"$appId-$executorId", pid, currentCores, maxMemory))
       
   }
 

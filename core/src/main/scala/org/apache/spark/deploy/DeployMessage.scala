@@ -209,14 +209,19 @@ private[deploy] object DeployMessages {
 
   case object SendHeartbeat
 
-  case class ReportPid(
+  case class RegisterExecutorToWorker(
       appId_ecutorId: String,
-      pid: String) 
+      pid: String,
+      cores: Int,
+      maxMemory: Int) 
     extends DeployMessage
 
   case class ExecutorShutdown(appId_ecutorId: String) extends DeployMessage
 
-  case object AskExecutorsResourceInfo
+  case class RequestExecutorsResourceInfo(requestId: Long)
 
-  case class ReportExecutorsResourceInfo(ExecutorResourceInfoSet: Set[ExecutorResourceInfo])
+  case class ReportExecutorsResourceInfo(
+    requestId: Long
+    executorResourceInfoSet: Set[ExecutorResourceInfo]) 
+    extends DeployMessage
 }

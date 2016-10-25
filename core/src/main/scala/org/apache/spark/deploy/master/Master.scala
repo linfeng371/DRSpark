@@ -1,4 +1,4 @@
-/*
+/* 
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -31,6 +31,7 @@ import org.apache.spark.deploy.DeployMessages._
 import org.apache.spark.deploy.master.DriverState.DriverState
 import org.apache.spark.deploy.master.MasterMessages._
 import org.apache.spark.deploy.master.ui.MasterWebUI
+import org.apache.spark.deploy.worker.ExecutorResourceInfo
 import org.apache.spark.deploy.rest.StandaloneRestServer
 import org.apache.spark.internal.Logging
 import org.apache.spark.metrics.MetricsSystem
@@ -60,7 +61,11 @@ private[deploy] class Master(
   private val RETAINED_DRIVERS = conf.getInt("spark.deploy.retainedDrivers", 200)
   private val REAPER_ITERATIONS = conf.getInt("spark.dead.worker.persistence", 15)
   private val RECOVERY_MODE = conf.get("spark.deploy.recoveryMode", "NONE")
-  private val DYNAMICRESOURCESCHEDULE_TIME_MS = conf.getInt("spark.dynamicResourceSchedule.time", 15) * 1000
+  private val DYNAMICRESOURCESCHEDULE_AUTO_INTERVAL_MS = conf.getInt("spark.dynamicResourceSchedule.autoInterval", 10) * 1000
+  private val DYNAMICRESOURCESCHEDULE_SHOTEST_INTERVAL_MS = conf.getInt("spark.dynamicResourceSchedule.shotestInterval", 15) * 1000
+  private val PHITHRESHOLD = conf.getFloat("spark.dynamicResourceSchedule.phiThreshold", 0.4)
+  private val OMEGATHRESHOLD = conf.getFloat("spark.dynamicResourceSchedule.omegaThreshold", 0.5)
+  private val NEWEXECUTORBENEFITCOEFFICIENT = conf.getFloat("spark.dynamicResourceSchedule.newExecutorBenefitCofficient", 0.5)
 
   val workers = new HashSet[WorkerInfo]
   val idToApp = new HashMap[String, ApplicationInfo]
@@ -125,6 +130,14 @@ private[deploy] class Master(
   private var restServer: Option[StandaloneRestServer] = None
   private var restServerBoundPort: Option[Int] = None
 
+  private var lastDynamicResourceScheduleTime = 0L
+  private var dynamicResourceScheduling: Boolean = false
+  private val globalExecutorResourceInfoSet = scala.collection.mutable.Set[executorResourceInfo]()
+  private var infoSetCount = 0
+  private var lastAverageBenefit: Option[Int] = None
+
+  private var resourceRequests = new ArrayBuffer[ResourceRequest]
+
   override def onStart(): Unit = {
     logInfo("Starting Spark master at " + masterUrl)
     logInfo(s"Running Spark version ${org.apache.spark.SPARK_VERSION}")
@@ -139,9 +152,10 @@ private[deploy] class Master(
 
     dynamicResourceScheduleTask = dynamicResourceScheduleThread.scheduleAtFixedRate(new Runnable {
       override def run(): Unit = Utils.tryLogNonFatalError {
-        self.send(DynamicResourceSchedule)
+        self.send(CyclicallyDynamicResourceSchedule)
       }
-    }, 0, DYNAMICRESOURCESCHEDULE_TIME_MS, TimeUnit.MILLISECONDS)
+    }, 0, DYNAMICRESOURCESCHEDULE_AUTO_INTERVAL_MS, TimeUnit.MILLISECONDS)
+
     if (restServerEnabled) {
       val port = conf.getInt("spark.master.rest.port", 6066)
       restServer = Some(new StandaloneRestServer(address.host, port, conf, self, masterUrl))
@@ -208,6 +222,57 @@ private[deploy] class Master(
   }
 
   override def receive: PartialFunction[Any, Unit] = {
+  	
+  	case DynamicResourceSchedule(type) => 
+      if(dynamicResourceScheduling){
+        logInfo("receive DynamicResourceSchedule, but dynamicResourceScheduling, do nothing")
+      }
+      else{
+        var justHadDynamicResourceSchedule = 
+          System.currentTimeMillis() - lastDynamicResourceScheduleTime < DYNAMICRESOURCESCHEDULE_SHOTEST_INTERVAL_MS
+        if(type == "Periodically" && justHadDynamicResourceSchedule)
+          logInfo("receive DynamicResourceSchedule, but justHadDynamicResourceSchedule, do nothing.")
+        else{
+          logInfo("receive DynamicResourceSchedule, start DynamicResourceSchedule.")
+          
+          // now start dynamicResourceSchedule
+          dynamicResourceScheduling = true
+
+          // ask workers to send their executor resource info
+          lastDynamicResourceScheduleTime = System.currentTimeMillis()
+          workers.foreach({worker =>
+          worker.endpoint.send(RequestExecutorsResourceInfo(lastDynamicResourceScheduleTime))
+          logInfo(s"send RequestExecutorsResourceInfo to worker: ${worker.id}")
+          })
+        }
+      }
+      
+    case ReportExecutorsResourceInfo(requestId, executorResourceInfoSet) =>
+      if(!dynamicResourceScheduling){
+        logInfo(s"bad ReportExecutorsResourceInfo($requestId), but !dynamicResourceScheduling, do nothing")
+      }
+      else{
+        // test if overdue
+        if(requestId != lastDynamicResourceScheduleTime){
+          logInfo(s"overdue ReportExecutorsResourceInfo($requestId), lastDynamicResourceScheduleTime is $lastDynamicResourceScheduleTime")
+        }
+        else{
+          globalExecutorResourceInfoSet ++= executorResourceInfoSet
+          infoSetCount += 1    
+          if(infoSetCount <= workers.size){
+            // There are workers who have not reported their ExecutorsResourceInfo. Do nothing and wait.
+            logInfo(s"Good ReportExecutorsResourceInfo, add to globalExecutorResourceInfoSet. infoSetCount=$infoSetCount,workerAmount=${wokers.size}")
+          }
+          else if(infoSetCount == workers.size){
+            // All worker have reported, start calculate.
+            logInfo(s"All worker have reported, call GenerateResourceRequest")
+            generateResourceRequest()
+          }
+          else
+            throw new Exception(s"infoSetCount:$infoSetCount is bigger than workersAmount:${workers.size}")
+        }
+      }
+
     case ElectedLeader =>
       val (storedApps, storedDrivers, storedWorkers) = persistenceEngine.readPersistedData(rpcEnv)
       state = if (storedApps.isEmpty && storedDrivers.isEmpty && storedWorkers.isEmpty) {
@@ -492,6 +557,100 @@ private[deploy] class Master(
     case KillExecutors(appId, executorIds) =>
       val formattedExecutorIds = formatExecutorIds(executorIds)
       context.reply(handleKillExecutors(appId, formattedExecutorIds))
+  }
+
+  private def generateResourceRequest() { // TODO
+    // generate resource request from executor info
+    globalExecutorResourceInfoSet.foreach({executorInfo =>
+      // do something with resourceRequests
+      })
+
+    // generate resource request from waiting apps
+    waitingApps.foreach({app =>
+      // do something with resourceRequests
+      })
+
+    selectRequest()
+  }
+
+  private def selectRequest() {
+    // average request benefit to calculate benefit of new executor 
+    // equivalent to β in the paper 
+    val averageRequestBenefit = (resourceRequests:\0)(_+_)
+
+    val Vertexes = new ArrayBuffer[Vertex]
+    val usableWorkers = workers.toArray.filter(_.state == WorkerState.ALIVE)
+    // Create vertex from resourceRequests
+    resourceRequests.foreach({request =>
+      request.requestType match{
+        case "new" =>
+        usableWorkers.foreach({worker =>
+          if(worker.coresFree >= request.cores && worker.memoryFree >= request.memory)
+            newVertex(request, worker)
+          })
+        case "restart" =>
+          // TODO restart it
+        case "adjust" =>
+          idToWorker.get(request.workerId) match {
+            case Some(worker) =>
+              if((worker.coresFree >= request.cores && worker.memoryFree >= request.memory)
+                newVertex(request, worker)
+            case None =>
+              logWarning("request to unknown worker")
+          }
+      }
+      })
+
+    // Create vertex from waitingApps
+    for (app <- waitingApps if app.coresLeft > 0) {
+      val appBenefit = getAppBenefit(app.id)
+
+      val coresPerExecutor: Option[Int] = app.desc.coresPerExecutor
+      // Filter out workers that don't have enough resources to launch an executor
+      val usableWorkers = workers.toArray.filter(_.state == WorkerState.ALIVE)
+        .filter(worker => worker.memoryFree >= app.desc.memoryPerExecutorMB &&
+          worker.coresFree >= coresPerExecutor.getOrElse(1))
+        .sortBy(_.coresFree).reverse
+      val assignedCores = scheduleExecutorsOnWorkers(app, usableWorkers, spreadOutApps)
+
+      // Now that we've decided how many cores to allocate on each worker, let's create vertexes
+      for (pos <- 0 until usableWorkers.length if assignedCores(pos) > 0) {
+        val numExecutors = coresPerExecutor.map { assignedCores / _ }.getOrElse(1)
+        val coresToAssign = coresPerExecutor.getOrElse(assignedCores)
+        for (i <- 1 to numExecutors) {
+          val thisWorkerId = usableWorkers(pos).id
+          newVertex(new ResourceRequest(app, "new", None, thisWorkerId, coresToAssign, app.desc.memoryPerExecutorMB, ), usableWorkers(pos), appBenefit)
+        }
+        
+      }
+    }
+
+    private class Vertex(
+      val workerId: String,
+      val request: ResourceRequest,){
+
+    }
+
+    private def newVertex(request: ResourceRequest, worker: WorkerInfo){
+      Vertexes += new Vertex(worker.id, request)
+    }
+
+    private def getAppBenefit(appId: String): Float = {
+      if(idToApp(appId).state != ApplicationState.RUNNING){
+        averageRequestBenefit * NEWEXECUTORBENEFITCOEFFICIENT
+      }
+      else{
+        var count = 0
+        // calculate average benefit of all request that belong to this app
+        // equivalent to α in the paper 
+        var appExecutorAverageBenefit = (resourceRequests :\ 0)((a,b) => 
+          if(a.appId == appId) {
+            count +=1
+            a.benefit + b
+          } 
+          else 0)/count}
+        // lastAverageBenefit 今天做到这~~~~~~~~~~~~~
+    }
   }
 
   override def onDisconnected(address: RpcAddress): Unit = {

@@ -17,7 +17,9 @@
 
 package org.apache.spark.deploy.worker
 
-private[spark] class ExecutorResourceInfo(
+import org.apache.spark.internal.Logging
+
+private[spark] class ExecutorResourceInfo with Logging(
     _executorId: String,
     _cpuRate: Float,
     _memRate: Float)
@@ -25,4 +27,13 @@ private[spark] class ExecutorResourceInfo(
     val executorId = _executorId
     val cpuRate = _cpuRate
     val memRate = _memRate
+    override def equals(other: Any): Boolean = other match {  
+      case that:Ei =>       	
+      	if(this.executorId == that.executorId){
+      		logInfo(s"Warning! Duplicate ExecutorResourceInfo appears,id=${that.executorId}") 
+      		true
+      	}
+      	else false
+      case _ => false 
+  }   
 }

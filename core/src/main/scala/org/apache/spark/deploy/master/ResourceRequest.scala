@@ -17,30 +17,16 @@
 
 package org.apache.spark.deploy.master
 
-sealed trait MasterMessages extends Serializable
 
-/** Contains messages seen only by the Master and its associated entities. */
-private[master] object MasterMessages {
+private[spark] class ResourceRequest(
+    val appId: String,
+    val requestType: String,
+    val executorId: Option[String],
+    val workerId: String,
+    val cores: Int,
+    val memory: Int,
+    val benefit: Float)
+  {
 
-  // LeaderElectionAgent to Master
-
-  case object ElectedLeader
-
-  case object RevokedLeadership
-
-  // Master to itself
-
-  case object CheckForWorkerTimeOut
-
-  case class BeginRecovery(storedApps: Seq[ApplicationInfo], storedWorkers: Seq[WorkerInfo])
-
-  case object CompleteRecovery
-
-  case object BoundPortsRequest
-
-  case class BoundPortsResponse(rpcEndpointPort: Int, webUIPort: Int, restPort: Option[Int])
-
-  // type can be "Periodically" and "Non-periodically"
-  case class DynamicResourceSchedule(type: String)
-
+  
 }
